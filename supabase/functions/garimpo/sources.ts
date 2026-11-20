@@ -1,3 +1,4 @@
+import { secret } from "./secrets.ts";
 // Fontes de preço do Garimpo.
 // Cada fonte devolve Offer[]; falhas são isoladas (uma loja fora do ar não derruba as outras).
 
@@ -69,7 +70,7 @@ export function storeFromUrl(url: string): string {
 
 // ---------- Google Shopping via SerpAPI ----------
 export async function serpapiShopping(query: string, cache: Cache): Promise<Offer[]> {
-  const key = Deno.env.get("SERPAPI_KEY");
+  const key = await secret("SERPAPI_KEY");
   if (!key) return [];
   const cacheKey = `serpapi:${query.toLowerCase().trim()}`;
   const hours = Number(Deno.env.get("SERPAPI_CACHE_HOURS") ?? "20");
@@ -99,7 +100,7 @@ export async function serpapiShopping(query: string, cache: Cache): Promise<Offe
     .filter((o) => o.title && o.url && o.price) as Offer[];
 }
 
-// ---------- KaBuM (busca pública, lê o JSON embutido na página) ----------
+// ---------- KaBuM (API pública de catálogo; o site bloqueia servidores) ----------
 function walk(node: unknown, visit: (o: Record<string, unknown>) => void, depth = 0) {
   if (depth > 12 || node === null || typeof node !== "object") return;
   if (Array.isArray(node)) {
@@ -114,53 +115,90 @@ function walk(node: unknown, visit: (o: Record<string, unknown>) => void, depth 
   }
 }
 
+const KABUM_API = "https://servicespub.prod.api.aws.grupokabum.com.br/catalog/v2/products";
+
+function kabumOffer(d: any): Offer | null {
+  const a = d?.attributes ?? {};
+  if (a.available === false) return null;
+  const price = parsePrice(a.offer?.price_with_discount ?? a.price_with_discount ?? a.price);
+  if (!price || !a.title) return null;
+  let image: string | null = null;
+  try {
+    const ph = typeof a.photos === "string" ? JSON.parse(a.photos) : a.photos;
+    image = ph?.m?.[0] ?? ph?.p?.[0] ?? ph?.g?.[0] ?? null;
+  } catch { /* sem foto */ }
+  return {
+    store: "KaBuM!",
+    title: a.title,
+    price,
+    url: `https://www.kabum.com.br/produto/${d.id}${a.product_link ? "/" + a.product_link : ""}`,
+    image,
+    source: "kabum",
+  };
+}
+
 export async function kabumSearch(query: string, cache: Cache): Promise<Offer[]> {
   const cacheKey = `kabum:${query.toLowerCase().trim()}`;
   let offers = (await cache.get(cacheKey, 5)) as Offer[] | null;
   if (offers) return offers;
-  const slug = encodeURIComponent(query.trim().toLowerCase().replace(/\s+/g, "-"));
-  const html = await fetchText(`https://www.kabum.com.br/busca/${slug}`);
-  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!m) throw new Error("KaBuM: estrutura da página mudou");
-  const seen = new Map<string, Offer>();
-  walk(JSON.parse(m[1]), (o) => {
-    const code = o.code ?? o.codigo;
-    const name = o.name ?? o.nome;
-    const price = parsePrice(o.priceWithDiscount ?? o.preco_desconto ?? o.price ?? o.preco);
-    const available = o.available ?? o.disponibilidade ?? true;
-    if (code && typeof name === "string" && price && available !== false) {
-      const url = `https://www.kabum.com.br/produto/${code}`;
-      if (!seen.has(url)) {
-        seen.set(url, {
-          store: "KaBuM!",
-          title: name,
-          price,
-          url,
-          image: (o.thumbnail ?? o.image ?? o.img ?? null) as string | null,
-          source: "kabum",
-        });
-      }
-    }
-  });
-  offers = [...seen.values()];
+  const json = JSON.parse(await fetchText(`${KABUM_API}?query=${encodeURIComponent(query)}&page_size=40&sort=most_searched`));
+  offers = (json.data ?? []).map(kabumOffer).filter(Boolean) as Offer[];
   await cache.set(cacheKey, "kabum", offers);
+  return offers;
+}
+
+async function kabumProduct(url: string): Promise<Offer[] | null> {
+  const id = url.match(/kabum\.com\.br\/produto\/(\d+)/)?.[1];
+  if (!id) return null;
+  const json = JSON.parse(await fetchText(`${KABUM_API}/${id}`));
+  const o = kabumOffer(json.data);
+  if (!o) throw new Error("KaBuM: produto indisponível");
+  return [o];
+}
+
+// ---------- Buscapé (comparador: reúne ofertas de várias lojas) ----------
+export async function buscapeSearch(query: string, cache: Cache): Promise<Offer[]> {
+  const cacheKey = `buscape:${query.toLowerCase().trim()}`;
+  let offers = (await cache.get(cacheKey, 5)) as Offer[] | null;
+  if (offers) return offers;
+  const html = await fetchText(`https://www.buscape.com.br/search?q=${encodeURIComponent(query)}`);
+  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) throw new Error("Buscapé: estrutura da página mudou");
+  const hits: any[] = JSON.parse(m[1])?.props?.initialReduxState?.hits?.hits ?? [];
+  offers = hits
+    .map((h) => {
+      const price = parsePrice(h.price);
+      if (!price || !h.name || !h.url) return null;
+      const store = h.merchantName || h.bestOffer?.merchantName ||
+        (h.storeCount ? `${h.storeCount} lojas (Buscapé)` : "Buscapé");
+      return {
+        store,
+        title: h.name,
+        price,
+        url: new URL(h.url, "https://www.buscape.com.br").toString(),
+        image: h.image ?? null,
+        source: "buscape",
+      } as Offer;
+    })
+    .filter(Boolean) as Offer[];
+  await cache.set(cacheKey, "buscape", offers);
   return offers;
 }
 
 // ---------- Mercado Livre (API oficial, opcional) ----------
 async function mlToken(cache: Cache): Promise<string | null> {
-  const id = Deno.env.get("ML_CLIENT_ID");
-  const secret = Deno.env.get("ML_CLIENT_SECRET");
-  if (!id || !secret) return null;
+  const id = await secret("ML_CLIENT_ID");
+  const clientSecret = await secret("ML_CLIENT_SECRET");
+  if (!id || !clientSecret) return null;
   const cached = (await cache.get("ml:token", 5)) as { access_token: string } | null;
   if (cached) return cached.access_token;
   const stored = (await cache.get("ml:refresh", 24 * 180)) as { refresh_token: string } | null;
-  const refresh = stored?.refresh_token ?? Deno.env.get("ML_REFRESH_TOKEN");
+  const refresh = stored?.refresh_token ?? (await secret("ML_REFRESH_TOKEN"));
   if (!refresh) return null;
   const res = await fetch("https://api.mercadolibre.com/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams({ grant_type: "refresh_token", client_id: id, client_secret: secret, refresh_token: refresh }),
+    body: new URLSearchParams({ grant_type: "refresh_token", client_id: id, client_secret: clientSecret, refresh_token: refresh }),
   });
   const json = await res.json();
   if (!json.access_token) throw new Error(`Mercado Livre token: ${json.message ?? res.status}`);
@@ -196,7 +234,17 @@ export async function mercadoLivreSearch(query: string, cache: Cache): Promise<O
 // ---------- Página de produto (link colado) ----------
 // Lê dados estruturados (JSON-LD / meta tags), que a maioria das lojas publica para o Google.
 export async function productPage(url: string): Promise<Offer[]> {
-  const html = await fetchText(url);
+  const viaKabum = await kabumProduct(url);
+  if (viaKabum) return viaKabum;
+  let html: string;
+  try {
+    html = await fetchText(url);
+  } catch (e) {
+    if (/HTTP 403/.test((e as Error).message)) {
+      throw new Error(`${storeFromUrl(url)} bloqueia leitura automática. Adicione esse produto pelo nome.`);
+    }
+    throw e;
+  }
   let title: string | null = null;
   let image: string | null = null;
   let price: number | null = null;
@@ -277,6 +325,7 @@ export async function collect(
   const all = (await Promise.all([
     run("Google Shopping", () => serpapiShopping(q, cache)),
     run("KaBuM", () => kabumSearch(q, cache)),
+    run("Buscapé", () => buscapeSearch(q, cache)),
     run("Mercado Livre", () => mercadoLivreSearch(q, cache)),
   ])).flat();
   const offers = filterOffers(all, {

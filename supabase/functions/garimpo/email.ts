@@ -1,3 +1,4 @@
+import { secret } from "./secrets.ts";
 // E-mails do Garimpo via Resend (azul + amarelo arara-canindé)
 
 const BLUE = "#0B4FA8";
@@ -5,13 +6,13 @@ const YELLOW = "#FFC531";
 const brl = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export async function sendEmail(to: string, subject: string, html: string) {
-  const key = Deno.env.get("RESEND_API_KEY");
+  const key = await secret("RESEND_API_KEY");
   if (!key) throw new Error("RESEND_API_KEY não configurada");
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: Deno.env.get("RESEND_FROM") ?? "Garimpo <onboarding@resend.dev>",
+      from: (await secret("RESEND_FROM")) ?? "Garimpo <onboarding@resend.dev>",
       to: [to],
       subject,
       html,
@@ -20,8 +21,7 @@ export async function sendEmail(to: string, subject: string, html: string) {
   if (!res.ok) throw new Error(`Resend: ${res.status} ${await res.text()}`);
 }
 
-function shell(title: string, body: string) {
-  const app = Deno.env.get("APP_URL") ?? "";
+function shell(title: string, body: string, app: string) {
   return `<!doctype html><html><body style="margin:0;background:#F3F6FB;font-family:Arial,Helvetica,sans-serif;color:#0E1B33">
   <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
   <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:16px;overflow:hidden">
@@ -45,7 +45,7 @@ export type AlertLine = {
   image?: string | null;
 };
 
-export function alertEmail(lines: AlertLine[]) {
+export function alertEmail(lines: AlertLine[], app = "") {
   const rows = lines.map((l) => `
     <div style="border:1px solid #E3E9F3;border-radius:12px;padding:16px;margin-bottom:12px">
       <div style="font-weight:bold;font-size:16px">${esc(l.itemTitle)}</div>
@@ -58,12 +58,12 @@ export function alertEmail(lines: AlertLine[]) {
   const subject = lines.length === 1
     ? `${lines[0].itemTitle} por ${brl(lines[0].price)} — ${lines[0].reasons[0]}`
     : `${lines.length} itens do seu radar baixaram de preço`;
-  return { subject, html: shell("Achamos uma oferta para você", rows) };
+  return { subject, html: shell("Achamos uma oferta para você", rows, app) };
 }
 
 export type DigestLine = { title: string; price: number | null; store: string | null; url: string | null; change: number | null; target: number | null };
 
-export function digestEmail(lines: DigestLine[]) {
+export function digestEmail(lines: DigestLine[], app = "") {
   const rows = lines.map((l) => {
     const ch = l.change === null || l.change === 0 ? "" :
       l.change < 0
@@ -77,7 +77,7 @@ export function digestEmail(lines: DigestLine[]) {
   }).join("");
   return {
     subject: "Seu resumo diário do Garimpo",
-    html: shell("Melhores preços de hoje no seu radar", `<table width="100%" cellpadding="0" cellspacing="0">${rows}</table>`),
+    html: shell("Melhores preços de hoje no seu radar", `<table width="100%" cellpadding="0" cellspacing="0">${rows}</table>`, app),
   };
 }
 

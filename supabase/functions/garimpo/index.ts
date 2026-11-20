@@ -4,8 +4,9 @@
 //   check_item   (usuário logado)  -> checa agora um item do próprio radar
 //   cron_check   (x-cron-secret)   -> checa itens vencidos (roda de hora em hora, cada item a cada ~6h)
 //   cron_digest  (x-cron-secret)   -> manda o resumo diário
-import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2";
 import { Cache, collect, Offer } from "./sources.ts";
+import { secret } from "./secrets.ts";
 import { AlertLine, alertEmail, digestEmail, DigestLine, sendEmail } from "./email.ts";
 
 const cors = {
@@ -122,7 +123,7 @@ async function sendAlerts(byUser: Map<string, AlertLine[]>) {
   for (const [userId, lines] of byUser) {
     const to = await emailFor(userId);
     if (!to) continue;
-    const { subject, html } = alertEmail(lines);
+    const { subject, html } = alertEmail(lines, (await secret("APP_URL")) ?? "");
     try { await sendEmail(to, subject, html); } catch (e) { console.error("email", userId, (e as Error).message); }
   }
 }
@@ -174,7 +175,7 @@ async function cronDigest() {
         change: prev && it.best_price ? Number((it.best_price - prev).toFixed(2)) : null,
       });
     }
-    const { subject, html } = digestEmail(lines);
+    const { subject, html } = digestEmail(lines, (await secret("APP_URL")) ?? "");
     try { await sendEmail(p.email, subject, html); sent++; } catch (e) { console.error("digest", p.id, (e as Error).message); }
   }
   return { sent };
@@ -188,7 +189,8 @@ Deno.serve(async (req) => {
     const action = body.action as string;
 
     if (action === "cron_check" || action === "cron_digest") {
-      if (req.headers.get("x-cron-secret") !== Deno.env.get("CRON_SECRET")) return json({ error: "não autorizado" }, 401);
+      const cronSecret = await secret("CRON_SECRET");
+      if (!cronSecret || req.headers.get("x-cron-secret") !== cronSecret) return json({ error: "não autorizado" }, 401);
       return json(action === "cron_check" ? await cronCheck() : await cronDigest());
     }
 
