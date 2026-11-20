@@ -1,26 +1,46 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@theme {
+  --color-arara-50: #EEF4FC;
+  --color-arara-100: #D8E6F8;
+  --color-arara-200: #ADC9EF;
+  --color-arara-500: #1E6AD0;
+  --color-arara-700: #0B4FA8;
+  --color-arara-800: #083D84;
+  --color-arara-900: #0E1B33;
+  --color-sol-100: #FFF4CF;
+  --color-sol-300: #FFDB6B;
+  --color-sol-500: #FFC531;
+  --color-sol-600: #E8A800;
+  --color-mata-500: #2DB36A;
+  --color-mata-700: #0A8F4D;
+  --font-sans: "Nunito Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Baloo 2", ui-sans-serif, system-ui, sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #F5F8FD;
+  color: var(--color-arara-900);
+}
+
+@utility card {
+  @apply rounded-2xl border border-arara-100 bg-white shadow-[0_1px_0_rgba(14,27,51,.04)];
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-arara-700 text-white hover:bg-arara-800;
+}
+@utility btn-sol {
+  @apply btn bg-sol-500 text-arara-900 hover:bg-sol-300;
+}
+@utility btn-ghost {
+  @apply btn text-arara-700 hover:bg-arara-50;
+}
+@utility input {
+  @apply w-full rounded-xl border border-arara-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-arara-500 focus:ring-2 focus:ring-arara-100;
+}
+@utility label {
+  @apply mb-1 block text-xs font-bold uppercase tracking-wide text-arara-800/70;
 }

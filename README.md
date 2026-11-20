@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Garimpo 🦜
 
-## Getting Started
+Radar de ofertas: o usuário coloca no radar o que quer comprar (pelo nome ou colando o link) e o Garimpo vasculha as lojas a cada 6 horas, guarda o histórico e manda e-mail quando o preço cai.
 
-First, run the development server:
+## Arquitetura
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+| Parte | Onde roda | O que faz |
+|---|---|---|
+| App (Next.js 16) | Vercel | Login, radar, histórico, ajustes |
+| Banco + Auth | Supabase | Tabelas com RLS (cada usuário só vê o próprio radar) |
+| Edge Function `garimpo` | Supabase | Busca preços, aplica filtros, grava ofertas, envia alertas |
+| Agendamento | Supabase `pg_cron` | Checagem de hora em hora (cada item a cada ~6h) + resumo diário às 8h |
+| E-mail | Resend | Alertas e resumo diário |
+
+### Fontes de preço
+- **Google Shopping via SerpAPI**: cobre a maioria das lojas do Brasil. Cache de 20h por busca, compartilhado entre usuários, para economizar cota.
+- **KaBuM!**: lê os dados da página de busca.
+- **Mercado Livre (API oficial)**: opcional, ativa ao configurar `ML_CLIENT_ID`, `ML_CLIENT_SECRET` e `ML_REFRESH_TOKEN`.
+- **Link colado**: lê os dados estruturados (JSON-LD / meta tags) da página do produto, o que funciona na maioria das lojas.
+
+### Alertas
+- Preço-alvo atingido
+- Queda de X% desde a última checagem
+- Menor preço já visto
+- Resumo diário
+
+Um mesmo alerta não é repetido em 24h, a não ser que o preço caia ainda mais.
+
+### Afiliados
+Cadastre na tabela `affiliate_programs`:
+```sql
+insert into affiliate_programs (domain, query_param, param_value) values ('amazon.com.br', 'tag', 'seutag-20');
+-- ou com redirecionador:
+insert into affiliate_programs (domain, url_template) values ('exemplo.com.br', 'https://parceiro.com/r?u={url}');
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Variáveis
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Vercel**
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**Supabase → Edge Functions → Secrets**
+- `SERPAPI_KEY`: chave da https://serpapi.com
+- `RESEND_API_KEY`: chave da https://resend.com
+- `RESEND_FROM`: opcional; sem domínio verificado, use `Garimpo <onboarding@resend.dev>`, que só entrega para o e-mail dono da conta Resend
+- `CRON_SECRET`: segredo aleatório, igual ao guardado no Vault
+- `APP_URL`: URL do app na Vercel, usada nos links dos e-mails
+- `CHECK_EVERY_HOURS` (padrão 6) e `SERPAPI_CACHE_HOURS` (padrão 20)
 
-## Learn More
+## Banco
+Rodar `supabase/migrations/0001_schema.sql` e, depois de publicar a função, `0002_cron.sql`.
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Desenvolvimento
+```bash
+npm install
+npm run dev
+```
